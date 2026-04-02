@@ -33,10 +33,14 @@ COLUMN_MAP = {
 
 # ── SMART PARSER ──────────────────────────────────────────────────────────────
 def detect_header_row(raw: pd.DataFrame) -> int:
-    """Find the row index that most likely contains column headers."""
+    """Find the row index that most likely contains column headers.
+    Expects raw to already be a string-typed DataFrame."""
     best_row, best_score = 0, 0
     for i in range(min(20, len(raw))):
-        row_text = " ".join(raw.iloc[i].astype(str).str.lower().tolist())
+        try:
+            row_text = " ".join(raw.iloc[i].str.lower().fillna("").tolist())
+        except Exception:
+            row_text = " ".join(str(v).lower() for v in raw.iloc[i])
         score = sum(
             1 for keywords in COLUMN_MAP.values()
             for kw in keywords if kw in row_text
@@ -103,11 +107,21 @@ def parse_excel_all_sheets(file_bytes: bytes, selected_sheets: list | None = Non
         if raw.empty:
             continue
 
+        # Force every cell to string so header detection never sees floats
+        raw = raw.fillna("").astype(str)
+
         header_row = detect_header_row(raw)
-        headers = raw.iloc[header_row].astype(str).str.strip().tolist()
-        df = raw.iloc[header_row + 1:].copy()
-        df.columns = make_unique_columns(headers)
+        headers = raw.iloc[header_row].str.strip().tolist()
+        df = pd.read_excel(xls, sheet_name=sheet, header=None,
+                           skiprows=header_row + 1)
+        if df.empty:
+            continue
+        df.columns = make_unique_columns(headers[:len(df.columns)])
         df = df.dropna(how="all")
+
+        # Strip whitespace from string columns
+        for col in df.select_dtypes(include="object").columns:
+            df[col] = df[col].astype(str).str.strip().replace("nan", pd.NA)
 
         df = auto_map_columns(df)
 
@@ -119,7 +133,13 @@ def parse_excel_all_sheets(file_bytes: bytes, selected_sheets: list | None = Non
         used_sheets.append(sheet)
 
     if not dfs:
-        raise ValueError("No recognisable payroll data found in any sheet.")
+        raise ValueError("No recognisable payroll data found in any sheet. "
+                         "Check that the file has columns like 'Employee Name', "
+                         "'Total Earnings', or 'Net Pay'.")
+
+    # Align columns before concat to avoid mixed-type issues
+    all_cols = list(dict.fromkeys(col for d in dfs for col in d.columns))
+    dfs = [d.reindex(columns=all_cols) for d in dfs]
 
     return pd.concat(dfs, ignore_index=True), used_sheets
 
