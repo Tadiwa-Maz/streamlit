@@ -59,36 +59,67 @@ if uploaded_file:
     df = load_file(uploaded_file)
     if df is not None:
 
-        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Employee Search", "Analysis", "Flags/Download"])
+        tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Employee Insights", "Analysis", "Flags/Download"])
 
         # ── TAB 1: OVERVIEW ─────────────
         with tab1:
-            st.header("Dataset Overview")
+            st.header("Overall Payroll Overview")
             st.write(f"Rows: {df.shape[0]}, Columns: {df.shape[1]}")
-            st.dataframe(df.head(10), use_container_width=True)
-
-            st.subheader("Column Types")
-            st.dataframe(pd.DataFrame(df.dtypes, columns=["Data Type"]), use_container_width=True)
 
             numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
             if numeric_cols:
-                st.subheader("Numeric Summary")
-                st.dataframe(df[numeric_cols].describe().T, use_container_width=True)
-
-                # KPIs
                 total_pay = df[numeric_cols].sum(numeric_only=True).sum()
                 negative_flags = (df[numeric_cols] < 0).sum().sum()
                 st.metric("Total Payroll Amount", f"R {total_pay:,.2f}")
                 st.metric("Negative Amount Flags", negative_flags)
 
-        # ── TAB 2: EMPLOYEE SEARCH ─────────────
+        # ── TAB 2: EMPLOYEE INSIGHTS ─────────────
         with tab2:
             st.header("Search Employee")
             if "Employee Name" in df.columns:
                 emp_name = st.text_input("Type Employee Name")
                 if emp_name:
                     emp_df = df[df["Employee Name"].str.contains(emp_name, case=False, na=False)]
-                    st.dataframe(emp_df, use_container_width=True)
+                    if not emp_df.empty:
+                        st.subheader(f"Insights for {emp_name}")
+                        numeric_cols = emp_df.select_dtypes(include=np.number).columns.tolist()
+                        
+                        for col in numeric_cols:
+                            value = emp_df[col].sum(numeric_only=True)
+                            st.metric(col, f"R {value:,.2f}")
+
+                        # Pie charts: earnings, deductions, leave
+                        earnings_cols = [c for c in numeric_cols if "Pay" in c or "Bonus" in c or "Allowance" in c]
+                        if earnings_cols:
+                            earnings_totals = emp_df[earnings_cols].sum(numeric_only=True)
+                            fig_pie = px.pie(
+                                names=earnings_totals.index,
+                                values=earnings_totals.values,
+                                title="Employee Earnings Composition"
+                            )
+                            st.plotly_chart(fig_pie, use_container_width=True)
+
+                        deduction_cols = [c for c in numeric_cols if "Tax" in c or "UIF" in c or "Pension" in c or "Deduction" in c]
+                        if deduction_cols:
+                            deduction_totals = emp_df[deduction_cols].sum(numeric_only=True)
+                            fig_ded = px.pie(
+                                names=deduction_totals.index,
+                                values=deduction_totals.values,
+                                title="Employee Deductions Composition"
+                            )
+                            st.plotly_chart(fig_ded, use_container_width=True)
+
+                        leave_cols = [c for c in numeric_cols if "Leave" in c or "BCEA" in c]
+                        if leave_cols:
+                            leave_totals = emp_df[leave_cols].sum(numeric_only=True)
+                            fig_leave = px.pie(
+                                names=leave_totals.index,
+                                values=leave_totals.values,
+                                title="Employee Leave & Benefits"
+                            )
+                            st.plotly_chart(fig_leave, use_container_width=True)
+                    else:
+                        st.warning("No employee found with that name")
             else:
                 st.warning("No 'Employee Name' column found in dataset.")
 
@@ -98,52 +129,39 @@ if uploaded_file:
             numeric_cols = df.select_dtypes(include=np.number).columns.tolist()
             
             if numeric_cols:
-                # Pie chart: earnings composition
-                earnings_cols = [col for col in numeric_cols if "Pay" in col or "Allowance" in col or "Bonus" in col]
+                # Earnings
+                earnings_cols = [c for c in numeric_cols if "Pay" in c or "Bonus" in c or "Allowance" in c]
                 if earnings_cols:
                     earnings_totals = df[earnings_cols].sum(numeric_only=True)
                     fig_pie = px.pie(
                         names=earnings_totals.index,
                         values=earnings_totals.values,
-                        title="Composition of Total Earnings"
+                        title="Earnings Composition"
                     )
                     st.plotly_chart(fig_pie, use_container_width=True)
 
-                # Pie chart: deductions composition
-                deduction_cols = [col for col in numeric_cols if "Tax" in col or "UIF" in col or "Pension" in col or "Deduction" in col]
+                # Deductions
+                deduction_cols = [c for c in numeric_cols if "Tax" in c or "UIF" in c or "Pension" in c or "Deduction" in c]
                 if deduction_cols:
                     deduction_totals = df[deduction_cols].sum(numeric_only=True)
                     fig_pie_ded = px.pie(
                         names=deduction_totals.index,
                         values=deduction_totals.values,
-                        title="Composition of Total Deductions"
+                        title="Deductions Composition"
                     )
                     st.plotly_chart(fig_pie_ded, use_container_width=True)
 
-                # Histogram: gross pay distribution
+                # Gross Pay distribution
                 if "Gross Pay" in df.columns:
                     df["Gross Pay"] = pd.to_numeric(df["Gross Pay"], errors='coerce')
-                    fig_hist = px.histogram(df, x="Gross Pay", nbins=50,
-                                            title="Distribution of Gross Pay")
+                    fig_hist = px.histogram(df, x="Gross Pay", nbins=50, title="Gross Pay Distribution")
                     st.plotly_chart(fig_hist, use_container_width=True)
 
-                # Histogram: net pay distribution
+                # Net Pay distribution
                 if "Net Pay" in df.columns:
                     df["Net Pay"] = pd.to_numeric(df["Net Pay"], errors='coerce')
-                    fig_hist_net = px.histogram(df, x="Net Pay", nbins=50,
-                                                title="Distribution of Net Pay")
+                    fig_hist_net = px.histogram(df, x="Net Pay", nbins=50, title="Net Pay Distribution")
                     st.plotly_chart(fig_hist_net, use_container_width=True)
-
-                # Pie chart: leave pay composition
-                leave_cols = [col for col in numeric_cols if "Leave" in col or "BCEA" in col]
-                if leave_cols:
-                    leave_totals = df[leave_cols].sum(numeric_only=True)
-                    fig_pie_leave = px.pie(
-                        names=leave_totals.index,
-                        values=leave_totals.values,
-                        title="Composition of Leave Pay & Benefits"
-                    )
-                    st.plotly_chart(fig_pie_leave, use_container_width=True)
 
         # ── TAB 4: FLAGS & DOWNLOAD ─────────────
         with tab4:
