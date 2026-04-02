@@ -9,10 +9,8 @@ st.set_page_config(page_title="Payroll Insights", page_icon="💼", layout="wide
 # ── SMART PARSER ─────────────────────────────────────────────────────────────
 def detect_header_row(raw):
     for i in range(min(20, len(raw))):
-        # convert all to string safely
-        row = [str(x) if not pd.isna(x) else "" for x in raw.iloc[i]]
-        row_lower = [x.lower() for x in row]
-        if "employee" in " ".join(row_lower):
+        row = raw.iloc[i].astype(str).str.lower().tolist()
+        if "employee" in " ".join(row):
             return i
     return 0
 
@@ -31,7 +29,7 @@ COLUMN_MAP = {
 def auto_map_columns(df):
     df_copy = df.copy()
     for col in df.columns:
-        col_clean = str(col).lower().strip() if not pd.isna(col) else ""
+        col_clean = str(col).lower().strip()
         for target, options in COLUMN_MAP.items():
             if any(opt in col_clean for opt in options):
                 if target not in df_copy.columns:
@@ -46,7 +44,7 @@ def parse_excel_all_sheets(file):
         header_row = detect_header_row(raw)
         headers = raw.iloc[header_row]
         df = raw.iloc[header_row+1:].copy()
-        df.columns = [str(c) if not pd.isna(c) else "" for c in headers]
+        df.columns = headers
         df = df.dropna(how="all")
 
         # make duplicate columns unique
@@ -58,7 +56,9 @@ def parse_excel_all_sheets(file):
                     cols[j] = f"{dup}_{i}"
         df.columns = cols
 
+        # strip whitespace and clean numeric suffixes
         df.columns = df.columns.astype(str).str.strip().str.replace(r"\.\d+$", "", regex=True)
+
         df = auto_map_columns(df)
         dfs.append(df)
 
@@ -111,6 +111,8 @@ def run_flags(df):
             flags.append(("Info", name, code, "Zero earnings and net pay"))
 
     flag_df = pd.DataFrame(flags, columns=["Level","Employee","Code","Issue"])
+
+    # Add severity score
     severity_map = {"Critical":3, "Warning":2, "Info":1}
     flag_df["Severity"] = flag_df["Level"].map(severity_map)
 
@@ -155,35 +157,42 @@ with tab1:
 with tab2:
     st.title("Flags & Anomalies")
     flag_df = run_flags(df)
+
     if flag_df.empty:
         st.success("No issues detected")
     else:
-        st.dataframe(flag_df, use_container_width=True)
+        st.dataframe(flag_df, width='stretch')
 
 # ── TAB 3: ANALYSIS ──────────────────────────────────────────────────────────
 with tab3:
     st.title("Analysis")
+
     if all(c in df.columns for c in ["Total Earnings","Total Deductions"]):
         fig = px.scatter(df, x="Total Earnings", y="Total Deductions", hover_name="Employee Name")
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
 
     if "Total Earnings" in df.columns:
         top = df.sort_values("Total Earnings", ascending=False).head(10)
         st.subheader("Top Earners")
-        st.dataframe(top[["Employee Name","Total Earnings"]], use_container_width=True)
+        st.dataframe(top[["Employee Name","Total Earnings"]], width='stretch')
 
 # ── TAB 4: EMPLOYEE DRILLDOWN ───────────────────────────────────────────────
 with tab4:
     st.title("Employee Drilldown")
+
     search = st.text_input("Search by Employee Name or Code")
+
     filtered = df.copy()
     if search:
         filtered = df[df.astype(str).apply(lambda row: row.str.contains(search, case=False).any(), axis=1)]
+
     st.caption(f"{len(filtered)} results")
 
     if len(filtered) == 1:
         r = filtered.iloc[0]
+
         st.subheader(f"👤 {r.get('Employee Name','')} ({r.get('Employee Code','')})")
+
         c1,c2,c3 = st.columns(3)
         with c1:
             st.metric("Total Earnings", f"R {r.get('Total Earnings',0):,.0f}")
@@ -197,29 +206,33 @@ with tab4:
         st.subheader("Flags for Employee")
         emp_flags = run_flags(df)
         emp_flags = emp_flags[emp_flags["Employee"] == r.get("Employee Name")]
+
         if emp_flags.empty:
             st.success("No flags for this employee")
         else:
-            st.dataframe(emp_flags, use_container_width=True)
+            st.dataframe(emp_flags, width='stretch')
 
         st.subheader("Full Breakdown")
         breakdown = r.dropna()
         breakdown_df = pd.DataFrame(breakdown).reset_index()
         breakdown_df.columns = ["Item","Value"]
-        st.dataframe(breakdown_df, use_container_width=True)
+        st.dataframe(breakdown_df, width='stretch')
+
     else:
-        st.dataframe(filtered[[c for c in filtered.columns if c in ['Employee Name','Employee Code','Total Earnings','Net Pay']]], use_container_width=True)
+        st.dataframe(filtered[[c for c in filtered.columns if c in ['Employee Name','Employee Code','Total Earnings','Net Pay']]], width='stretch')
 
 # ── TAB 5: FULL DATA ─────────────────────────────────────────────────────────
 with tab5:
     st.title("Full Dataset")
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df, width='stretch')
 
 # ── TAB 6: EXPORTS ───────────────────────────────────────────────────────────
 with tab6:
     st.title("Download Reports")
+
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("Download Full Data CSV", csv, "payroll_data.csv")
+
     flag_df = run_flags(df)
     if not flag_df.empty:
         st.download_button("Download Flags Report", flag_df.to_csv(index=False), "flags.csv")
