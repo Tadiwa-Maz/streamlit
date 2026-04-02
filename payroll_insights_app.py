@@ -37,14 +37,13 @@ def auto_map_columns(df):
                     df_copy[target] = df[col]
     return df_copy
 
-
 def parse_excel_all_sheets(file):
     xls = pd.ExcelFile(file)
     dfs = []
     for sheet in xls.sheet_names:
         raw = pd.read_excel(xls, sheet_name=sheet, header=None)
         header_row = detect_header_row(raw)
-        headers = raw.iloc[header_row]
+        headers = raw.iloc[header_row].astype(str).str.strip()
         df = raw.iloc[header_row+1:].copy()
         df.columns = headers
         df = df.dropna(how="all")
@@ -58,14 +57,12 @@ def parse_excel_all_sheets(file):
                     cols[j] = f"{dup}_{i}"
         df.columns = cols
 
-        df.columns = df.columns.astype(str).str.strip().str.replace(r"\\.\\d+$", "", regex=True)
         df = auto_map_columns(df)
         dfs.append(df)
 
     return pd.concat(dfs, ignore_index=True)
 
-# ── FLAGS ENGINE (ENTERPRISE) ───────────────────────────────────────────────
-
+# ── FLAGS ENGINE ───────────────────────────────────────────────────────────────
 def run_flags(df):
     flags = []
 
@@ -223,12 +220,12 @@ with tab4:
         st.dataframe(filtered[[c for c in filtered.columns if c in ['Employee Name','Employee Code','Total Earnings','Net Pay']]], use_container_width=True)
 
 # ── TAB 5: FULL DATA ─────────────────────────────────────────────────────────
-with tab4:
+with tab5:
     st.title("Full Dataset")
     st.dataframe(df, use_container_width=True)
 
-# ── TAB 5: EXPORTS ───────────────────────────────────────────────────────────
-with tab5:
+# ── TAB 6: EXPORTS ───────────────────────────────────────────────────────────
+with tab6:
     st.title("Download Reports")
 
     csv = df.to_csv(index=False).encode("utf-8")
