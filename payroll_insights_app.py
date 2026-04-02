@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
-import io
 from datetime import date
 
 st.set_page_config(page_title="Payroll Insights", page_icon="💼", layout="wide")
@@ -156,7 +155,6 @@ with tab1:
 with tab2:
     st.title("Flags & Anomalies")
     flag_df = run_flags(df)
-
     if flag_df.empty:
         st.success("No issues detected")
     else:
@@ -225,20 +223,3 @@ with tab6:
     flag_df = run_flags(df)
     if not flag_df.empty:
         st.download_button("Download Flags Report", flag_df.to_csv(index=False), "flags.csv")
-
-# ── SAMPLE FILE ──────────────────────────────────────────────────────────────
-def create_sample():
-    data = {
-        "emp code": ["E001","E002","E003"],
-        "name": ["Alice","Bob","Charlie"],
-        "gross": [30000,20000,15000],
-        "deductions": [5000,18000,1000],
-        "net salary": [25000,2000,14000],
-        "paye": [4000,0,1000],
-    }
-    df = pd.DataFrame(data)
-    buf = io.BytesIO()
-    df.to_excel(buf, index=False)
-    return buf
-
-st.download_button("Download Sample Test File", create_sample().getvalue(), "sample_test.xlsx")
