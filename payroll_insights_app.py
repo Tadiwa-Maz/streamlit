@@ -497,6 +497,63 @@ with tab3:
         st.plotly_chart(fig_sheet, use_container_width=True)
 
 
+# ── HELPER (defined outside tabs so it's always in scope) ────────────────────
+def safe_metric(row, col, prefix="R "):
+    val = row.get(col, 0)
+    try:
+        return f"{prefix}{float(val):,.2f}"
+    except Exception:
+        return str(val) if val else "—"
+
+
+def render_employee_detail(r, flag_df):
+    """Render the full detail card for a single employee row."""
+    emp_name = r.get("Employee Name", "")
+    emp_code = r.get("Employee Code", "")
+    st.subheader(f"👤 {emp_name}  ({emp_code})")
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.metric("Total Earnings",   safe_metric(r, "Total Earnings"))
+        st.metric("Basic Salary",     safe_metric(r, "Basic Salary"))
+    with c2:
+        st.metric("Total Deductions", safe_metric(r, "Total Deductions"))
+        st.metric("PAYE",             safe_metric(r, "Pay as you Earn"))
+    with c3:
+        st.metric("Net Pay",          safe_metric(r, "Net Pay"))
+        st.metric("UIF",              safe_metric(r, "Unemployment Insurance Fund"))
+
+    # Waterfall chart
+    earn_val = float(r.get("Total Earnings", 0) or 0)
+    ded_val  = float(r.get("Total Deductions", 0) or 0)
+    net_val  = float(r.get("Net Pay", 0) or 0)
+    if earn_val > 0:
+        fig_wf = go.Figure(go.Waterfall(
+            orientation="v",
+            measure=["absolute", "relative", "total"],
+            x=["Gross Earnings", "Deductions", "Net Pay"],
+            y=[earn_val, -ded_val, net_val],
+            connector={"line": {"color": "rgb(63,63,63)"}},
+        ))
+        fig_wf.update_layout(title="Earnings Waterfall", showlegend=False)
+        st.plotly_chart(fig_wf, use_container_width=True)
+
+    st.subheader("Flags for this employee")
+    emp_flags = flag_df[flag_df["Employee"] == emp_name]
+    if emp_flags.empty:
+        st.success("No flags for this employee.")
+    else:
+        st.dataframe(style_flags(emp_flags), use_container_width=True, hide_index=True)
+
+    st.subheader("Full breakdown")
+    breakdown_df = (
+        r.dropna()
+        .reset_index()
+        .rename(columns={"index": "Item", 0: "Value"})
+    )
+    st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+
+
 # ── TAB 4: EMPLOYEE DRILLDOWN ─────────────────────────────────────────────────
 with tab4:
     st.title("Employee Drilldown")
@@ -514,8 +571,11 @@ with tab4:
 
         if filtered.empty:
             st.warning("No employees matched your search.")
-        elif len(filtered) > 1:
-            # Clickable table — user selects a row
+
+        elif len(filtered) == 1:
+            render_employee_detail(filtered.iloc[0], flag_df)
+
+        else:
             display_cols = [c for c in ["Employee Name", "Employee Code", "Total Earnings", "Total Deductions", "Net Pay"] if c in filtered.columns]
             selected = st.dataframe(
                 filtered[display_cols].reset_index(drop=True),
@@ -527,60 +587,10 @@ with tab4:
             selected_rows = selected.selection.rows if selected.selection else []
             if not selected_rows:
                 st.info("Click a row above to view the full employee breakdown.")
-                st.stop()
-            r = filtered.iloc[selected_rows[0]]
-        else:
-            r = filtered.iloc[0]
+            else:
+                render_employee_detail(filtered.iloc[selected_rows[0]], flag_df)
 
-        # ── Single employee detail view
-        emp_name = r.get("Employee Name", "")
-        emp_code = r.get("Employee Code", "")
-        st.subheader(f"👤 {emp_name}  ({emp_code})")
 
-        c1, c2, c3 = st.columns(3)
-        def safe_metric(col, label, prefix="R "):
-            val = r.get(col, 0)
-            try:
-                return f"{prefix}{float(val):,.2f}"
-            except Exception:
-                return str(val)
-
-        with c1:
-            st.metric("Total Earnings",   safe_metric("Total Earnings"))
-            st.metric("Basic Salary",     safe_metric("Basic Salary"))
-        with c2:
-            st.metric("Total Deductions", safe_metric("Total Deductions"))
-            st.metric("PAYE",             safe_metric("Pay as you Earn"))
-        with c3:
-            st.metric("Net Pay",          safe_metric("Net Pay"))
-            st.metric("UIF",              safe_metric("Unemployment Insurance Fund"))
-
-        # Waterfall chart: Earnings → Deductions → Net Pay
-        earn_val = float(r.get("Total Earnings", 0) or 0)
-        ded_val  = float(r.get("Total Deductions", 0) or 0)
-        net_val  = float(r.get("Net Pay", 0) or 0)
-        if earn_val > 0:
-            fig_wf = go.Figure(go.Waterfall(
-                orientation="v",
-                measure=["absolute", "relative", "total"],
-                x=["Gross Earnings", "Deductions", "Net Pay"],
-                y=[earn_val, -ded_val, net_val],
-                connector={"line": {"color": "rgb(63,63,63)"}},
-            ))
-            fig_wf.update_layout(title="Earnings Waterfall", showlegend=False)
-            st.plotly_chart(fig_wf, use_container_width=True)
-
-        st.subheader("Flags for this employee")
-        emp_flags = flag_df[flag_df["Employee"] == emp_name]
-        if emp_flags.empty:
-            st.success("No flags for this employee.")
-        else:
-            st.dataframe(style_flags(emp_flags), use_container_width=True, hide_index=True)
-
-        st.subheader("Full breakdown")
-        breakdown = r.dropna()
-        breakdown_df = pd.DataFrame({"Item": breakdown.index, "Value": breakdown.values})
-        st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
 
 
 # ── TAB 5: FULL DATA ──────────────────────────────────────────────────────────
