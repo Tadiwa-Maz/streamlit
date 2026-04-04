@@ -260,7 +260,6 @@ def enrich_analysis_columns(df: pd.DataFrame) -> pd.DataFrame:
     df["Deduction Rate %"] = (df.get("Total Deductions", 0) / safe_earnings * 100).round(2)
     df["Net-to-Gross %"] = (df.get("Net Pay", 0) / safe_earnings * 100).round(2)
 
-    # Component percentages relative to gross
     if "Pay as you Earn" in df:
         df["PAYE % of Gross"] = (df["Pay as you Earn"] / safe_earnings * 100).round(2)
     if "Pension" in df:
@@ -327,24 +326,55 @@ def band_shares(series: pd.Series, bands: list[tuple[float | None, float | None,
     return pd.DataFrame(rows)
 
 
+def _nice_step(value: float) -> float:
+    """Pick a round step size (1, 2, 5 x 10^n) near the target value."""
+    import math
+
+    if value <= 0:
+        return 1000.0
+    exponent = 10 ** math.floor(math.log10(value))
+    for m in (1, 2, 5, 10):
+        step = m * exponent
+        if value / step <= 5:
+            return step
+    return 10 * exponent
+
+
+def make_value_bands(series: pd.Series, target_bins: int = 5) -> list[tuple[float | None, float | None, str]]:
+    """Create simple Rand ranges based on the data spread."""
+    if series.empty:
+        return []
+    max_val = float(series.max())
+    step = _nice_step(max_val / max(1, target_bins))
+    bounds = [0.0]
+    while bounds[-1] < max_val:
+        bounds.append(bounds[-1] + step)
+    bands = []
+    for i in range(len(bounds) - 1):
+        low, high = bounds[i], bounds[i + 1]
+        bands.append((low, high, f"R {low:,.0f} – R {high:,.0f}"))
+    bands.append((bounds[-1], None, f"R {bounds[-1]:,.0f}+"))
+    return bands
+
+
 def summary_highlights(df: pd.DataFrame, kpis: dict, thresholds: dict) -> list[str]:
     highlights = []
 
     if kpis.get("ded_median") is not None:
-        highlights.append(f"Median deduction rate is {kpis['ded_median']:.1f}% of gross")
+        highlights.append(f"Typical deduction rate sits around {kpis['ded_median']:.1f}% of gross pay")
     if kpis.get("ded_above_warn") is not None:
         warn_pct = thresholds["warning_deduction_ratio"] * 100
-        highlights.append(f"{kpis['ded_above_warn']:.0f}% of employees have deductions above {warn_pct:.0f}% of gross")
+        highlights.append(f"{kpis['ded_above_warn']:.0f}% of people have deductions above the {warn_pct:.0f}% warning level")
 
     if kpis.get("net_median") is not None:
         highlights.append(
-            f"Typical take-home is {kpis['net_median']:.1f}% of gross (P10 {kpis['net_p10']:.1f}%, P90 {kpis['net_p90']:.1f}%)"
+            f"Most people take home about {kpis['net_median']:.1f}% of their gross pay"
         )
 
     if kpis.get("paye_cov") is not None:
-        highlights.append(f"PAYE present for {kpis['paye_cov']:.0f}% of employees")
+        highlights.append(f"PAYE is being withheld for {kpis['paye_cov']:.0f}% of employees")
     if kpis.get("uif_cov") is not None:
-        highlights.append(f"UIF present for {kpis['uif_cov']:.0f}% of employees")
+        highlights.append(f"UIF is being withheld for {kpis['uif_cov']:.0f}% of employees")
 
     return highlights
 
@@ -398,11 +428,9 @@ with st.sidebar:
                 st.error(str(e))
                 st.stop()
 
-# Prep and enrich data
 _df_prepared = prepare_df(df_raw)
 df = enrich_analysis_columns(_df_prepared)
 
-# Run flags once (cached)
 flag_df = run_flags(df.to_json(), json.dumps(thresholds))
 
 n_critical = (flag_df["Level"] == "Critical").sum() if not flag_df.empty else 0
@@ -475,7 +503,7 @@ with tab2:
     st.title("Flags & Anomalies")
 
     if flag_df.empty:
-        st.success("✅ No issues detected in this payroll run.")
+        st.success("No issues detected in this payroll run.")
     else:
         level_filter = st.multiselect(
             "Filter by level", ["Critical", "Warning", "Info"], default=["Critical", "Warning", "Info"]
@@ -519,49 +547,44 @@ with tab3:
     kpis = compute_kpis(df, thresholds)
     highlights = summary_highlights(df, kpis, thresholds)
     if highlights:
-        st.markdown(
-            "\n".join([f"- {text}" for text in highlights])
-        )
+        st.markdown("\n".join([f"- {text}" for text in highlights]))
 
     col_a, col_b = st.columns(2)
 
     with col_a:
         if "Total Earnings" in df.columns:
-            st.subheader("Earnings Distribution")
-            fig = px.histogram(df, x="Total Earnings", nbins=30, labels={"Total Earnings": "Gross Earnings (R)"})
-            p25, p50, p75 = df["Total Earnings"].quantile([0.25, 0.5, 0.75])
-            for val, label in [(p25, "P25"), (p50, "Median"), (p75, "P75")]:
-                fig.add_vline(x=val, line_dash="dash", annotation_text=label)
+            st.subheader("How gross pay is spread")
+            earnings = df["Total Earnings"].dropna()
+            bands = make_value_bands(earnings)
+            earnings_table = band_shares(earnings, bands)
+            st.dataframe(earnings_table, hide_index=True, use_container_width=True)
+            fig = px.bar(earnings_table, x="Band", y="Share %", text="Share %")
+            fig.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+            fig.update_yaxes(range=[0, 100])
             st.plotly_chart(fig, use_container_width=True)
-
-            stats = df["Total Earnings"].describe()
-            sc1, sc2, sc3 = st.columns(3)
-            sc1.metric("Median", f"R {stats['50%']:,.0f}")
-            sc2.metric("P25", f"R {stats['25%']:,.0f}")
-            sc3.metric("P75", f"R {stats['75%']:,.0f}")
 
     with col_b:
         if "Deduction Rate %" in df.columns:
-            st.subheader("Effective Deduction Rate")
+            st.subheader("Deduction bands (people)")
             rate_series = df["Deduction Rate %"].dropna()
             if not rate_series.empty:
-                fig2 = px.histogram(rate_series, x="Deduction Rate %", nbins=25, labels={"value": "Deduction Rate (%)"})
-                fig2.add_vline(x=thresholds["warning_deduction_ratio"] * 100, line_dash="dash", line_color="orange", annotation_text="Warning")
-                fig2.add_vline(x=thresholds["critical_deduction_ratio"] * 100, line_dash="dash", line_color="red", annotation_text="Critical")
+                bands = [
+                    (None, 30, "<30% of gross"),
+                    (30, 50, "30–50% of gross"),
+                    (50, 80, "50–80% of gross"),
+                    (80, None, "≥80% of gross"),
+                ]
+                rate_table = band_shares(rate_series, bands)
+                st.dataframe(rate_table, hide_index=True, use_container_width=True)
+                fig2 = px.bar(rate_table, x="Band", y="Share %", text="Share %")
+                fig2.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                fig2.update_yaxes(range=[0, 100])
                 st.plotly_chart(fig2, use_container_width=True)
-
-                m1, m2, m3 = st.columns(3)
-                m1.metric("Median", f"{kpis['ded_median']:.1f}%")
-                m2.metric("P90", f"{kpis['ded_p90']:.1f}%")
-                m3.metric("Above warning", f"{kpis['ded_above_warn']:.0f}%", help="Share of employees above the warning deduction ratio")
 
     col_c, col_d = st.columns(2)
     with col_c:
         if "Net-to-Gross %" in df.columns:
-            st.subheader("Net-to-Gross Take-home")
-            fig_ng = px.box(df, y="Net-to-Gross %", points="outliers", labels={"Net-to-Gross %": "Net / Gross (%)"})
-            st.plotly_chart(fig_ng, use_container_width=True)
-
+            st.subheader("Take‑home bands (net / gross)")
             takehome_band = df["Net-to-Gross %"].dropna()
             if not takehome_band.empty:
                 bands = [
@@ -570,38 +593,23 @@ with tab3:
                     (70, 90, "70–90% of gross"),
                     (90, None, "≥90% of gross"),
                 ]
-                st.dataframe(
-                    band_shares(takehome_band, bands),
-                    hide_index=True,
-                    use_container_width=True,
-                )
+                take_table = band_shares(takehome_band, bands)
+                st.dataframe(take_table, hide_index=True, use_container_width=True)
+                fig_ng = px.bar(take_table, x="Band", y="Share %", text="Share %")
+                fig_ng.update_traces(texttemplate="%{text:.1f}%", textposition="outside")
+                fig_ng.update_yaxes(range=[0, 100])
+                st.plotly_chart(fig_ng, use_container_width=True)
 
     with col_d:
-        # Simple, human-friendly table: how many people fall into deduction bands
-        if "Deduction Rate %" in df.columns:
-            st.subheader("Deduction Bands (people)")
-            bands = [
-                (None, 30, "<30% of gross"),
-                (30, 50, "30–50% of gross"),
-                (50, 80, "50–80% of gross"),
-                (80, None, "≥80% of gross"),
-            ]
-            st.dataframe(
-                band_shares(df["Deduction Rate %"].dropna(), bands),
-                hide_index=True,
-                use_container_width=True,
-            )
-
-        # Top 10 highest deduction rate employees, as a quick “who to look at” list
         if "Deduction Rate %" in df.columns and "Employee Name" in df.columns:
-            st.subheader("Top 10 Highest Deduction Rates")
+            st.subheader("Top 10 highest deduction rates")
             top10 = df.sort_values("Deduction Rate %", ascending=False)[
                 ["Employee Name", "Employee Code", "Deduction Rate %", "Total Earnings", "Total Deductions"]
             ].head(10)
             st.dataframe(top10.reset_index(drop=True), hide_index=True, use_container_width=True)
 
     if "_sheet" in df.columns and df["_sheet"].nunique() > 1:
-        st.subheader("Sheet Comparison (Month-over-Month)")
+        st.subheader("Sheet comparison (month‑over‑month)")
         sheet_summary = df.groupby("_sheet")[
             [col for col in ["Total Earnings", "Net Pay", "Total Deductions"] if col in df.columns]
         ].sum().reset_index()
@@ -642,6 +650,23 @@ def render_employee_detail(r, flag_df):
         st.metric("Net Pay", safe_metric(r, "Net Pay"))
         st.metric("UIF", safe_metric(r, "Unemployment Insurance Fund"))
 
+    ded_rate = r.get("Deduction Rate %")
+    net_rate = r.get("Net-to-Gross %")
+    if ded_rate is not None:
+        if ded_rate < 50:
+            badge = "🟢 <50%"
+        elif ded_rate < 80:
+            badge = "🟡 50–80%"
+        else:
+            badge = "🔴 ≥80%"
+    else:
+        badge = "—"
+
+    cols_ratio = st.columns(3)
+    cols_ratio[0].metric("Deduction rate", f"{ded_rate:.1f}%" if ded_rate is not None else "—", badge)
+    cols_ratio[1].metric("Take‑home (net/gross)", f"{net_rate:.1f}%" if net_rate is not None else "—")
+    cols_ratio[2].metric("Variable earnings", safe_metric(r, "Variable Earnings") if "Variable Earnings" in r else "—")
+
     earn_val = float(r.get("Total Earnings", 0) or 0)
     ded_val = float(r.get("Total Deductions", 0) or 0)
     net_val = float(r.get("Net Pay", 0) or 0)
@@ -665,9 +690,46 @@ def render_employee_detail(r, flag_df):
     else:
         st.dataframe(style_flags(emp_flags), use_container_width=True, hide_index=True)
 
-    st.subheader("Full breakdown")
-    breakdown_df = r.dropna().reset_index().rename(columns={"index": "Item", 0: "Value"})
-    st.dataframe(breakdown_df, use_container_width=True, hide_index=True)
+    st.subheader("Compliance checks")
+    checks = []
+    checks.append(("PAYE present", r.get("Pay as you Earn", 0) > 0))
+    checks.append(("UIF present", r.get("Unemployment Insurance Fund", 0) > 0))
+    checks.append(("Pension present", r.get("Pension", 0) > 0))
+    if ded_rate is not None:
+        checks.append(("Deduction rate under 80%", ded_rate < 80))
+    check_rows = [{"Check": c[0], "Status": "Yes" if c[1] else "Missing"} for c in checks]
+    st.table(pd.DataFrame(check_rows))
+
+    if "_sheet" in df.columns:
+        st.subheader("Across periods (by sheet)")
+        emp_all = df[df["Employee Name"] == emp_name]
+        if not emp_all.empty:
+            hist_cols = [c for c in ["_sheet", "Total Earnings", "Total Deductions", "Net Pay", "Deduction Rate %", "Net-to-Gross %"] if c in emp_all.columns]
+            hist = emp_all[hist_cols].rename(columns={"_sheet": "Sheet"})
+            st.dataframe(hist.reset_index(drop=True), hide_index=True, use_container_width=True)
+            if "Sheet" in hist and "Net Pay" in hist:
+                fig_hist = px.line(hist, x="Sheet", y="Net Pay", markers=True, title="Net Pay over sheets")
+                st.plotly_chart(fig_hist, use_container_width=True)
+
+    st.subheader("Payslip‑style breakdown")
+    groups = []
+    def add_row(label, val):
+        groups.append({"Item": label, "Value": val})
+    add_row("Gross pay", safe_metric(r, "Total Earnings"))
+    add_row("Basic salary", safe_metric(r, "Basic Salary"))
+    add_row("Variable earnings", safe_metric(r, "Variable Earnings") if "Variable Earnings" in r else "—")
+    add_row("PAYE", safe_metric(r, "Pay as you Earn"))
+    add_row("UIF", safe_metric(r, "Unemployment Insurance Fund"))
+    add_row("Pension", safe_metric(r, "Pension"))
+    add_row("Total deductions", safe_metric(r, "Total Deductions"))
+    add_row("Net pay", safe_metric(r, "Net Pay"))
+    st.table(pd.DataFrame(groups))
+
+    st.subheader("Reviewer notes")
+    note_key = f"note_{emp_name}_{emp_code}"
+    default_note = st.session_state.get(note_key, "")
+    note_val = st.text_area("Notes (kept only in this session)", value=default_note, key=note_key)
+    st.session_state[note_key] = note_val
 
 
 # ── TAB 4: EMPLOYEE DRILLDOWN ───────────────────────────────────────────────
@@ -735,7 +797,7 @@ with tab6:
     with col1:
         st.subheader("Full Payroll Data")
         csv_data = df.drop(columns=[c for c in ["_sheet"] if c in df.columns]).to_csv(index=False).encode("utf-8")
-        st.download_button("⬇ Download CSV", csv_data, file_name="payroll_data.csv", mime="text/csv")
+        st.download_button("Download CSV", csv_data, file_name="payroll_data.csv", mime="text/csv")
 
     with col2:
         st.subheader("Flags Report")
@@ -743,7 +805,7 @@ with tab6:
             st.info("No flags to export.")
         else:
             flag_csv = flag_df.to_csv(index=False).encode("utf-8")
-            st.download_button("⬇ Download Flags CSV", flag_csv, file_name="payroll_flags.csv", mime="text/csv")
+            st.download_button("Download Flags CSV", flag_csv, file_name="payroll_flags.csv", mime="text/csv")
 
     with col3:
         st.subheader("Summary Statistics")
@@ -751,7 +813,7 @@ with tab6:
         if numeric_cols:
             summary_csv = df[numeric_cols].describe().to_csv().encode("utf-8")
             st.download_button(
-                "⬇ Download Summary Stats",
+                "Download Summary Stats",
                 summary_csv,
                 file_name="payroll_summary_stats.csv",
                 mime="text/csv",
